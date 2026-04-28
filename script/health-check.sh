@@ -4,7 +4,7 @@
 # =============================================================================
 # Runs after setup. Checks:
 #   - Required CLIs on PATH
-#   - .env has the keys we expect
+#   - .env has the keys we expect (OpenRouter primary, Anthropic/OpenAI fallback)
 #   - Postgres reachable + schema present
 #   - OpenClaw workspace populated
 #   - Health endpoint responding (if agent is running)
@@ -13,7 +13,7 @@
 # Exits 0 only if everything passes. Exits 1 with a summary if anything fails.
 # =============================================================================
 
-set -uo pipefail   # not -e: we want to keep checking after individual failures
+set -uo pipefail
 
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[0;33m'; CYN='\033[0;36m'; DIM='\033[2m'; RST='\033[0m'
 ok()   { printf "${GRN}✓${RST} %s ${DIM}%s${RST}\n" "$1" "${2:-}"; PASSED=$((PASSED+1)); }
@@ -60,31 +60,36 @@ check_env() {
   fi
   ok ".env" "present"
 
-  local required=(DATABASE_URL)
-  local llm_keys=(ANTHROPIC_API_KEY OPENAI_API_KEY)
-  local optional=(REDDIT_CLIENT_ID X_BEARER_TOKEN TELEGRAM_BOT_TOKEN)
+  # DATABASE_URL is required
+  if grep -qE "^DATABASE_URL=.+" "${REPO_ROOT}/.env"; then
+    ok "  DATABASE_URL" "set"
+  else
+    fail "  DATABASE_URL" "missing or empty"
+  fi
 
-  for key in "${required[@]}"; do
-    if grep -qE "^${key}=.+" "${REPO_ROOT}/.env"; then
-      ok "  ${key}" "set"
-    else
-      fail "  ${key}" "missing or empty"
-    fi
-  done
-
-  # At least one LLM key required
+  # Need AT LEAST ONE LLM key — OpenRouter, Anthropic, or OpenAI
+  local llm_keys=(OPENROUTER_API_KEY OPEN_ROUTER_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY)
   local llm_ok=false
+  local found_keys=()
   for key in "${llm_keys[@]}"; do
     if grep -qE "^${key}=.+" "${REPO_ROOT}/.env"; then
-      ok "  ${key}" "set"
+      found_keys+=("${key}")
       llm_ok=true
     fi
   done
-  if ! ${llm_ok}; then
-    fail "  LLM key" "neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is set"
+  if ${llm_ok}; then
+    ok "  LLM key" "${found_keys[*]}"
+  else
+    fail "  LLM key" "none of OPENROUTER_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY is set"
   fi
 
-  for key in "${optional[@]}"; do
+  # Show which model is configured
+  local model
+  model=$(grep -E "^MODEL=" "${REPO_ROOT}/.env" | head -1 | cut -d'=' -f2-)
+  if [[ -n "${model}" ]]; then ok "  MODEL" "${model}"; else warn "  MODEL" "unset (using default)"; fi
+
+  # Optional integrations
+  for key in REDDIT_CLIENT_ID X_BEARER_TOKEN TELEGRAM_BOT_TOKEN; do
     if grep -qE "^${key}=.+" "${REPO_ROOT}/.env"; then
       ok "  ${key}" "set"
     else
@@ -117,16 +122,15 @@ check_postgres() {
   fi
   ok "connection" "reachable"
 
-  local expected=(sources raw_posts leads outreach_drafts heartbeats logs rate_limits sessions)
   local count
   count=$(psql "${DATABASE_URL}" -tAc \
     "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY(ARRAY['sources','raw_posts','leads','outreach_drafts','heartbeats','logs','rate_limits','sessions'])" 2>/dev/null \
     | tr -d '[:space:]')
 
-  if [[ "${count}" == "${#expected[@]}" ]]; then
-    ok "schema" "${count}/${#expected[@]} tables"
+  if [[ "${count}" == "8" ]]; then
+    ok "schema" "${count}/8 tables"
   else
-    fail "schema" "${count}/${#expected[@]} tables present — run: bash script/init-db.sh"
+    fail "schema" "${count}/8 tables present — run: bash script/init-db.sh"
   fi
 
   # Recent heartbeat?
@@ -198,6 +202,36 @@ check_health_endpoint() {
 # ---------- External APIs (best-effort) ----------
 check_apis() {
   hdr "External APIs (best-effort)"
+
+  # OpenRouter (preferred)
+  local OR_KEY="${OPENROUTER_API_KEY:-${OPEN_ROUTER_API_KEY:-}}"
+  if [[ -n "${OR_KEY}" ]]; then
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 \
+      -H "Authorization: Bearer ${OR_KEY}" \
+      https://openrouter.ai/api/v1/auth/key 2>/dev/null || echo 000)
+    [[ "${code}" == "200" ]] && ok "OpenRouter auth" "${code}" || warn "OpenRouter auth" "${code}"
+  elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 \
+      -X POST https://api.anthropic.com/v1/messages \
+      -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+      -H 'anthropic-version: 2023-06-01' \
+      -H 'content-type: application/json' \
+      -d '{"model":"claude-haiku-4-5-20251001","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}' \
+      2>/dev/null || echo 000)
+    [[ "${code}" == "200" ]] && ok "Anthropic" "${code}" || warn "Anthropic" "${code}"
+  elif [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 \
+      -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+      https://api.openai.com/v1/models 2>/dev/null || echo 000)
+    [[ "${code}" == "200" ]] && ok "OpenAI" "${code}" || warn "OpenAI" "${code}"
+  else
+    warn "LLM" "no key configured"
+  fi
+
+  # Reddit
   if [[ -n "${REDDIT_CLIENT_ID:-}" && -n "${REDDIT_CLIENT_SECRET:-}" ]]; then
     local code
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
@@ -210,6 +244,7 @@ check_apis() {
     warn "Reddit" "creds not set"
   fi
 
+  # Twitter
   if [[ -n "${X_BEARER_TOKEN:-}" ]]; then
     local code
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
@@ -220,18 +255,7 @@ check_apis() {
     warn "Twitter" "X_BEARER_TOKEN not set"
   fi
 
-  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
-    local code
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 \
-      -X POST https://api.anthropic.com/v1/messages \
-      -H "x-api-key: ${ANTHROPIC_API_KEY}" \
-      -H 'anthropic-version: 2023-06-01' \
-      -H 'content-type: application/json' \
-      -d '{"model":"claude-haiku-4-5-20251001","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}' \
-      2>/dev/null || echo 000)
-    [[ "${code}" == "200" ]] && ok "Anthropic" "${code}" || warn "Anthropic" "${code}"
-  fi
-
+  # Telegram
   if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
     local code
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \

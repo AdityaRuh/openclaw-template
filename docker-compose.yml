@@ -28,12 +28,26 @@ services:
       DATABASE_URL: postgres://hookline:${POSTGRES_PASSWORD:-hookline_dev}@postgres:5432/hookline
       INSTANCE_ID: hookline-1
       HEALTH_PORT: 8080
-      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+
+      # LLM provider — OpenRouter recommended
+      LLM_PROVIDER: ${LLM_PROVIDER:-openrouter}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_REFERER: ${OPENROUTER_REFERER:-}
+      OPENROUTER_APP_NAME: ${OPENROUTER_APP_NAME:-}
+      MODEL: ${MODEL:-anthropic/claude-sonnet-4}
+      MODEL_SCORER: ${MODEL_SCORER:-}
+      MODEL_DRAFTER: ${MODEL_DRAFTER:-}
+
+      # Fallback direct provider keys
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+
+      # Scrapers
       REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
       REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
       X_BEARER_TOKEN: ${X_BEARER_TOKEN:-}
+
+      # Notifications
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     ports:

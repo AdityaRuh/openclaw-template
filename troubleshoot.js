@@ -13,7 +13,9 @@
  *   node troubleshoot.js prune-degraded      # Reset degraded sources
  */
 
+const path = require('path');
 const db = require('./db/client');
+const llm = require(path.join(__dirname, 'lib/llm'));
 
 const cmd = process.argv[2];
 const args = process.argv.slice(3);
@@ -50,6 +52,7 @@ async function doctor() {
   // 4. Sources health
   try {
     const r = await db.query(`SELECT status, count(*) FROM sources GROUP BY status`);
+    if (r.rows.length === 0) check(true, 'Sources', '(none configured yet)');
     for (const row of r.rows) {
       check(row.status === 'healthy', `Sources ${row.status}`, `${row.count}`);
     }
@@ -70,9 +73,19 @@ async function doctor() {
     check(n === 0, 'No errors in last hour', `${n} errors`);
   } catch { check(false, 'Error scan failed'); }
 
-  // 7. Env vars
+  // 7. LLM provider
+  try {
+    const provider = llm.pickProvider();
+    check(true, 'LLM provider', provider);
+    check(true, 'Scorer model', llm.modelFor('scorer'));
+    check(true, 'Drafter model', llm.modelFor('drafter'));
+  } catch (err) {
+    check(false, 'LLM provider', err.message);
+  }
+
+  // 8. Env vars
   const required = ['DATABASE_URL'];
-  const optional = ['REDDIT_CLIENT_ID', 'X_BEARER_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'TELEGRAM_BOT_TOKEN'];
+  const optional = ['REDDIT_CLIENT_ID', 'X_BEARER_TOKEN', 'TELEGRAM_BOT_TOKEN'];
   for (const v of required) check(!!process.env[v], `env: ${v}`);
   for (const v of optional) check(!!process.env[v], `env: ${v}`, '(optional)');
 
@@ -97,6 +110,13 @@ async function replayScoring() {
 async function testApis() {
   console.log(`${C.cyan}Testing external APIs…${C.reset}\n`);
 
+  // LLM (via shared client — will use whichever provider is configured)
+  try {
+    const r = await llm.ping();
+    if (r.ok) check(true, `LLM (${r.provider})`, `${r.model} → ${r.sample}`);
+    else check(false, 'LLM', r.error);
+  } catch (err) { check(false, 'LLM', err.message); }
+
   // Reddit
   if (process.env.REDDIT_CLIENT_ID && process.env.REDDIT_CLIENT_SECRET) {
     try {
@@ -119,22 +139,6 @@ async function testApis() {
       check(r.ok, 'Twitter search', `${r.status}`);
     } catch (err) { check(false, 'Twitter search', err.message); }
   } else check(false, 'Twitter', 'token missing');
-
-  // Anthropic
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 5, messages: [{ role: 'user', content: 'hi' }] })
-      });
-      check(r.ok, 'Anthropic API', `${r.status}`);
-    } catch (err) { check(false, 'Anthropic API', err.message); }
-  } else check(false, 'Anthropic', 'key missing');
 
   // Telegram
   if (process.env.TELEGRAM_BOT_TOKEN) {

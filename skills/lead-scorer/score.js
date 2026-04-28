@@ -2,22 +2,26 @@
 /**
  * Lead scorer — reads JSONL post records from stdin, outputs scored records.
  * Usage: cat raw_posts.jsonl | node score.js > scored.jsonl
+ *
+ * Provider auto-selected from env (OpenRouter > Anthropic > OpenAI).
+ * See lib/llm.js for details.
  */
 
 const fs = require('fs');
+const path = require('path');
 const readline = require('readline');
-
-const PROVIDER = process.env.LLM_PROVIDER || 'anthropic';
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-const OPENAI_KEY = process.env.OPENAI_API_KEY;
+const { complete } = require(path.join(__dirname, '../../lib/llm'));
 
 function loadUserContext() {
-  try {
-    return fs.readFileSync('/workspace/USER.md', 'utf8');
-  } catch {
-    try { return fs.readFileSync('USER.md', 'utf8'); }
-    catch { return '(USER.md not found — using generic ICP)'; }
+  const candidates = [
+    path.join(__dirname, '../../USER.md'),
+    '/workspace/USER.md',
+    'USER.md'
+  ];
+  for (const p of candidates) {
+    try { return fs.readFileSync(p, 'utf8'); } catch { /* keep trying */ }
   }
+  return '(USER.md not found — using generic ICP)';
 }
 
 const SYSTEM_PROMPT = `You are a lead-scoring engine. Given a social media post and a user's ICP definition, you output a JSON score.
@@ -34,46 +38,6 @@ Scoring:
 
 Disqualifiers (auto-zero): job ad, promotional content, competitor employee, bot account.`;
 
-async function scoreWithAnthropic(post, userContext) {
-  const userMsg = `## User's ICP\n${userContext}\n\n## Post to score\n${JSON.stringify(post, null, 2)}`;
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': ANTHROPIC_KEY,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 400,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMsg }]
-    })
-  });
-  if (!res.ok) throw new Error(`Anthropic ${res.status}`);
-  const json = await res.json();
-  const text = json.content?.[0]?.text || '{}';
-  return JSON.parse(text.replace(/```json|```/g, '').trim());
-}
-
-async function scoreWithOpenAI(post, userContext) {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${OPENAI_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: `## User's ICP\n${userContext}\n\n## Post\n${JSON.stringify(post)}` }
-      ]
-    })
-  });
-  if (!res.ok) throw new Error(`OpenAI ${res.status}`);
-  const json = await res.json();
-  return JSON.parse(json.choices[0].message.content);
-}
-
 (async () => {
   const userContext = loadUserContext();
   const rl = readline.createInterface({ input: process.stdin });
@@ -84,9 +48,13 @@ async function scoreWithOpenAI(post, userContext) {
     try { post = JSON.parse(line); } catch { continue; }
 
     try {
-      const result = PROVIDER === 'openai' && OPENAI_KEY
-        ? await scoreWithOpenAI(post, userContext)
-        : await scoreWithAnthropic(post, userContext);
+      const result = await complete({
+        system: SYSTEM_PROMPT,
+        user: `## User's ICP\n${userContext}\n\n## Post to score\n${JSON.stringify(post, null, 2)}`,
+        role: 'scorer',
+        jsonOnly: true,
+        maxTokens: 400
+      });
 
       process.stdout.write(JSON.stringify({
         external_id: post.external_id,
