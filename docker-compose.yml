@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hookline
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hookline_dev}
+      POSTGRES_DB: hookline
+    volumes:
+      - hookline_pg:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hookline -d hookline"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  agent:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://hookline:${POSTGRES_PASSWORD:-hookline_dev}@postgres:5432/hookline
+      INSTANCE_ID: hookline-1
+      HEALTH_PORT: 8080
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+      X_BEARER_TOKEN: ${X_BEARER_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    ports:
+      - "8080:8080"
+
+volumes:
+  hookline_pg:

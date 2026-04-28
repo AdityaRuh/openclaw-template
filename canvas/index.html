@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>🪝 Hookline — Lead Funnel</title>
+<style>
+  :root {
+    --bg: #0d0f12;
+    --panel: #15181d;
+    --line: #23272e;
+    --text: #e8eaed;
+    --muted: #8b94a3;
+    --accent: #f6c452;
+    --green: #4ade80;
+    --red: #ef4444;
+    --blue: #60a5fa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); color: var(--text); padding: 24px; min-height: 100vh;
+  }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+  h1 span { color: var(--accent); }
+  .status { font-size: 12px; color: var(--muted); }
+  .status .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 6px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .funnel { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 32px; }
+  .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; position: relative; }
+  .stage .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .stage .value { font-size: 32px; font-weight: 700; margin-top: 4px; line-height: 1; }
+  .stage .delta { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .stage.qualified .value { color: var(--accent); }
+  .stage.converted .value { color: var(--green); }
+
+  .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+  .panel h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; letter-spacing: 0.05em; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+  td { padding: 10px 6px; border-bottom: 1px solid var(--line); }
+  td a { color: var(--blue); text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+  .score-pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-weight: 600; font-size: 11px; }
+  .score-90 { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+  .score-75 { background: rgba(246, 196, 82, 0.15); color: var(--accent); }
+  .score-60 { background: rgba(96, 165, 250, 0.15); color: var(--blue); }
+
+  .beats { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; font-size: 11px; }
+  .beat { display: flex; gap: 8px; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.02); }
+  .beat .time { color: var(--muted); width: 64px; flex-shrink: 0; }
+  .beat .task { color: var(--text); }
+
+  .empty { color: var(--muted); padding: 16px 0; font-size: 12px; }
+  footer { margin-top: 32px; color: var(--muted); font-size: 11px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🪝 <span>Hookline</span> &mdash; lead funnel</h1>
+  <div class="status"><span class="pulse"></span><span id="status-text">live · last 7 days</span></div>
+</header>
+
+<div class="funnel" id="funnel">
+  <!-- populated by JS -->
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Recent leads</h2>
+    <table id="leads-table">
+      <thead><tr><th>Score</th><th>Author</th><th>Platform</th><th>Title</th><th>Status</th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Heartbeats</h2>
+    <div class="beats" id="beats"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<footer>refreshes every 15s · <a href="/readyz" style="color:var(--muted);">/readyz</a></footer>
+
+<script>
+const STAGES = [
+  { key: 'scraped_7d',   label: 'Scraped',   cls: '' },
+  { key: 'scored_7d',    label: 'Scored',    cls: '' },
+  { key: 'qualified_7d', label: 'Qualified', cls: 'qualified' },
+  { key: 'drafted_7d',   label: 'Drafted',   cls: '' },
+  { key: 'approved_7d',  label: 'Approved',  cls: '' },
+  { key: 'sent_7d',      label: 'Sent',      cls: '' },
+  { key: 'responded_7d', label: 'Responded', cls: '' },
+  { key: 'converted_7d', label: 'Converted', cls: 'converted' }
+];
+
+function scoreClass(s) { return s >= 90 ? 'score-90' : s >= 75 ? 'score-75' : 'score-60'; }
+function timeAgo(iso) {
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return `${Math.floor(s/86400)}d ago`;
+}
+function timeShort(iso) { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+
+async function loadFunnel() {
+  const r = await fetch('/api/funnel'); const f = await r.json();
+  document.getElementById('funnel').innerHTML = STAGES.map(s => `
+    <div class="stage ${s.cls}">
+      <div class="label">${s.label}</div>
+      <div class="value">${f[s.key] || 0}</div>
+      <div class="delta">last 7 days</div>
+    </div>`).join('');
+}
+
+async function loadLeads() {
+  const r = await fetch('/api/leads'); const leads = await r.json();
+  const tbody = document.querySelector('#leads-table tbody');
+  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No leads yet — check back after first scrape cycle</td></tr>'; return; }
+  tbody.innerHTML = leads.slice(0, 20).map(l => `
+    <tr>
+      <td><span class="score-pill ${scoreClass(l.score)}">${l.score}</span></td>
+      <td>${(l.author || '').slice(0, 24)}</td>
+      <td>${l.platform}</td>
+      <td><a href="${l.url}" target="_blank" rel="noopener">${(l.title || '(no title)').slice(0, 70)}</a></td>
+      <td>${l.status}</td>
+    </tr>`).join('');
+}
+
+async function loadBeats() {
+  const r = await fetch('/api/beats'); const beats = await r.json();
+  const div = document.getElementById('beats');
+  if (!beats.length) { div.innerHTML = '<div class="empty">No beats yet</div>'; return; }
+  div.innerHTML = beats.map(b => `
+    <div class="beat">
+      <span class="time">${timeShort(b.beat_at)}</span>
+      <span class="task">${b.status} · ${b.current_task || '—'}</span>
+    </div>`).join('');
+}
+
+async function refresh() {
+  try {
+    await Promise.all([loadFunnel(), loadLeads(), loadBeats()]);
+    document.getElementById('status-text').textContent = `live · updated ${timeShort(new Date().toISOString())}`;
+  } catch (err) {
+    document.getElementById('status-text').textContent = 'connection lost — retrying…';
+  }
+}
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>

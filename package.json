@@ -1,0 +1,23 @@
+{
+  "name": "hookline-lead-gen-agent",
+  "version": "0.1.0",
+  "description": "🪝 Hookline — OpenClaw lead generation agent. Scrapes Reddit/Twitter for buying signals, scores leads, drafts personalized outreach.",
+  "main": "bot.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "node --watch bot.js",
+    "doctor": "node troubleshoot.js doctor",
+    "test-apis": "node troubleshoot.js test-apis",
+    "tail-errors": "node troubleshoot.js tail-errors",
+    "migrate": "psql $DATABASE_URL -f db/schema.sql"
+  },
+  "dependencies": {
+    "minimist": "^1.2.8",
+    "node-cron": "^3.0.3",
+    "pg": "^8.13.0"
+  },
+  "license": "MIT"
+}
